@@ -1,36 +1,155 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AI Medicine Information System
 
-## Getting Started
+Production-ready Next.js (App Router) app that:
 
-First, run the development server:
+1. Accepts only a medicine name from the user.
+2. Fetches official label data from OpenFDA.
+3. Sends structured data to OpenRouter (`mistralai/mistral-7b-instruct:free`, `temperature: 0.2`).
+4. Returns and displays a professional, structured response.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## Tech Stack
+
+- Frontend: Next.js App Router
+- Backend: Next.js Route Handler (`/api/medicine`)
+- External Data Source: OpenFDA Drug Label API
+- AI Provider: OpenRouter
+- Model: `mistralai/mistral-7b-instruct:free`
+
+## Folder Structure
+
+```text
+ai_assintant/
+	app/
+		api/
+			medicine/
+				route.ts            # Backend API: OpenFDA + OpenRouter
+		globals.css             # UI styling
+		layout.tsx              # App metadata/layout
+		page.tsx                # Frontend form + result rendering
+	public/
+	package.json
+	tsconfig.json
+	README.md
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Environment Variables
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Create `.env.local`:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+OPENROUTER_API_KEY=your_openrouter_api_key
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+```
 
-## Learn More
+## Run Locally
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+npm install
+npm run dev
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Open http://localhost:3000
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## API Route
 
-## Deploy on Vercel
+Endpoint: `POST /api/medicine`
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Request body:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```json
+{
+	"medicineName": "ibuprofen"
+}
+```
+
+Success response shape:
+
+```json
+{
+	"success": true,
+	"source": "openfda",
+	"summary": {
+		"medicineName": "...",
+		"primaryUses": "...",
+		"howItWorks": "...",
+		"commonSideEffects": "...",
+		"warningsPrecautions": "...",
+		"importantNotes": "..."
+	}
+}
+```
+
+## OpenFDA Fetch Logic (example)
+
+```ts
+const url = `https://api.fda.gov/drug/label.json?search=openfda.generic_name:%22${encodeURIComponent(medicineName)}%22&limit=1`;
+const response = await fetch(url, { cache: "no-store" });
+```
+
+Extracted fields:
+
+- `purpose`
+- `indications_and_usage`
+- `warnings`
+- `adverse_reactions`
+- `description`
+
+## OpenRouter Call (example)
+
+```ts
+const completion = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+	method: "POST",
+	headers: {
+		Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+		"Content-Type": "application/json",
+		"HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
+		"X-Title": "AI Medicine Information System",
+	},
+	body: JSON.stringify({
+		model: "mistralai/mistral-7b-instruct:free",
+		temperature: 0.2,
+		messages,
+		response_format: { type: "json_object" },
+	}),
+});
+```
+
+## Strict AI Guardrails
+
+System prompt enforces:
+
+- Use only provided OpenFDA content
+- No hallucination
+- No guessing missing data
+- Missing fields => `Information not available.`
+- No medical advice
+- JSON-only structured output
+
+## Frontend Component Behavior
+
+`app/page.tsx`:
+
+- Input for medicine name
+- `POST` to `/api/medicine`
+- Renders sections:
+	- Medicine Name
+	- Primary Uses
+	- How It Works
+	- Common Side Effects
+	- Warnings / Precautions
+	- Important Notes
+
+## Error Handling Logic
+
+- `400 VALIDATION_ERROR`: missing `medicineName`
+- `404 NOT_FOUND`: no OpenFDA label data
+- `500 INTERNAL_SERVER_ERROR`: upstream/API/runtime failures
+- Frontend shows safe user-facing error card
+
+## Deployment Tips
+
+1. Add env vars (`OPENROUTER_API_KEY`, `NEXT_PUBLIC_APP_URL`) in hosting provider.
+2. Prefer server-side API route only for OpenRouter calls (never expose key in client).
+3. Add rate-limiting and request logging for production traffic.
+4. Add monitoring/alerts for 5xx spikes and upstream failures.
+5. Consider response caching for frequently searched medicines.
