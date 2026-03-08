@@ -2,6 +2,8 @@
 
 import { FormEvent, useMemo, useState, useRef, useEffect } from "react";
 import { Layers, User, XCircle, Loader2, Send } from "lucide-react";
+import { useLanguage } from "./context/LanguageContext";
+import LanguageSelector from "./components/LanguageSelector";
 
 type MedicineSummary = {
   medicineName: string;
@@ -14,8 +16,9 @@ type MedicineSummary = {
 
 type ApiSuccessResponse = {
   success: true;
-  source: "openfda";
+  source: "openfda" | "ai-generated";
   summary: MedicineSummary;
+  disclaimer?: string;
 };
 
 type ApiErrorResponse = {
@@ -29,6 +32,8 @@ type Message = {
   type: "user" | "assistant" | "error";
   content: string;
   summary?: MedicineSummary;
+  source?: "openfda" | "ai-generated";
+  disclaimer?: string;
 };
 
 const RESULT_SECTIONS: Array<{ key: keyof MedicineSummary; label: string }> = [
@@ -46,6 +51,7 @@ export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const { language } = useLanguage();
 
   const isDisabled = useMemo(
     () => loading || medicineName.trim().length === 0,
@@ -59,6 +65,54 @@ export default function Home() {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  async function translateText(text: string, targetLang: string): Promise<string> {
+    if (targetLang === "en") return text;
+    
+    try {
+      const response = await fetch("/api/translate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text,
+          targetLanguage: targetLang,
+          sourceLanguage: "en",
+        }),
+      });
+
+      const data = await response.json();
+      return data.success ? data.translation : text;
+    } catch (error) {
+      console.error("Translation error:", error);
+      return text;
+    }
+  }
+
+  async function translateSummary(summary: MedicineSummary, targetLang: string): Promise<MedicineSummary> {
+    if (targetLang === "en") return summary;
+
+    try {
+      const response = await fetch("/api/translate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          summary,
+          targetLanguage: targetLang,
+          sourceLanguage: "en",
+        }),
+      });
+
+      const data = await response.json();
+      return data.success && data.summary ? data.summary : summary;
+    } catch (error) {
+      console.error("Translation error:", error);
+      return summary;
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -97,11 +151,26 @@ export default function Home() {
         return;
       }
 
+      // Translate the summary to the selected language
+      const translatedSummary = await translateSummary(payload.summary, language.code);
+      const translatedMessage = await translateText(
+        `Here's the information about ${payload.summary.medicineName}:`,
+        language.code
+      );
+
+      // Translate disclaimer if present
+      let translatedDisclaimer: string | undefined;
+      if (payload.disclaimer) {
+        translatedDisclaimer = await translateText(payload.disclaimer, language.code);
+      }
+
       const assistantMsg: Message = {
         id: (Date.now() + 1).toString(),
         type: "assistant",
-        content: `Here's the information about ${payload.summary.medicineName}:`,
-        summary: payload.summary,
+        content: translatedMessage,
+        summary: translatedSummary,
+        source: payload.source,
+        disclaimer: translatedDisclaimer,
       };
       setMessages((prev) => [...prev, assistantMsg]);
     } catch {
@@ -128,6 +197,7 @@ export default function Home() {
             </div>
             <h1>AI Assistant</h1>
           </div>
+          <LanguageSelector />
         </div>
       </header>
 
@@ -190,6 +260,12 @@ export default function Home() {
                     ) : (
                       <>
                         <p>{message.content}</p>
+                        {message.disclaimer && (
+                          <div className="disclaimer-badge">
+                            <span className="disclaimer-icon">ℹ️</span>
+                            <span>{message.disclaimer}</span>
+                          </div>
+                        )}
                         {message.summary && (
                           <div className="summary-grid">
                             {RESULT_SECTIONS.map((section) => (
