@@ -18,6 +18,8 @@ type ApiSuccessResponse = {
   success: true;
   source: "openfda" | "ai-generated";
   summary: MedicineSummary;
+  mode?: "guidance" | "consultation";
+  assistantMessage?: string;
   disclaimer?: string;
 };
 
@@ -32,11 +34,12 @@ type Message = {
   type: "user" | "assistant" | "error";
   content: string;
   summary?: MedicineSummary;
+  mode?: "guidance" | "consultation";
   source?: "openfda" | "ai-generated";
   disclaimer?: string;
 };
 
-const RESULT_SECTIONS: Array<{ key: keyof MedicineSummary; label: string }> = [
+const GUIDANCE_RESULT_SECTIONS: Array<{ key: keyof MedicineSummary; label: string }> = [
   { key: "medicineName", label: "Medicine Name" },
   { key: "primaryUses", label: "Primary Uses" },
   { key: "howItWorks", label: "How It Works" },
@@ -45,13 +48,28 @@ const RESULT_SECTIONS: Array<{ key: keyof MedicineSummary; label: string }> = [
   { key: "importantNotes", label: "Important Notes" },
 ];
 
+const CONSULTATION_CHAT_SECTIONS: Array<{ key: keyof MedicineSummary; label: string }> = [
+  { key: "medicineName", label: "Possible Conditions" },
+  { key: "primaryUses", label: "Common Medicines" },
+  { key: "howItWorks", label: "Precautions" },
+  { key: "commonSideEffects", label: "Advice" },
+  { key: "warningsPrecautions", label: "Disclaimer" },
+  { key: "importantNotes", label: "Follow-Up Questions" },
+];
+
 export default function Home() {
   const [medicineName, setMedicineName] = useState("");
+  const [inputMode, setInputMode] = useState<"guidance" | "consultation">("guidance");
   const [loading, setLoading] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const { language } = useLanguage();
+
+  const inputPlaceholder =
+    inputMode === "guidance"
+      ? "Ask for medicine guidance..."
+      : "Ask a consultation question...";
 
   const isDisabled = useMemo(
     () => loading || medicineName.trim().length === 0,
@@ -126,17 +144,29 @@ export default function Home() {
       id: Date.now().toString(),
       type: "user",
       content: userMessage,
+      mode: inputMode,
     };
     setMessages((prev) => [...prev, userMsg]);
     setLoading(true);
 
     try {
+      const requestBody =
+        inputMode === "consultation"
+          ? {
+              medicineName: userMessage,
+              mode: inputMode,
+            }
+          : {
+              medicineName: userMessage,
+              mode: inputMode,
+            };
+
       const response = await fetch("/api/medicine", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ medicineName: userMessage }),
+        body: JSON.stringify(requestBody),
       });
 
       const payload = (await response.json()) as ApiSuccessResponse | ApiErrorResponse;
@@ -153,8 +183,12 @@ export default function Home() {
 
       // Translate the summary to the selected language
       const translatedSummary = await translateSummary(payload.summary, language.code);
+      const assistantMessage = payload.assistantMessage ||
+        (inputMode === "guidance"
+          ? `Here's the information about ${payload.summary.medicineName}:`
+          : "Here is consultation guidance related to your question:");
       const translatedMessage = await translateText(
-        `Here's the information about ${payload.summary.medicineName}:`,
+        assistantMessage,
         language.code
       );
 
@@ -169,6 +203,7 @@ export default function Home() {
         type: "assistant",
         content: translatedMessage,
         summary: translatedSummary,
+        mode: payload.mode ?? inputMode,
         source: payload.source,
         disclaimer: translatedDisclaimer,
       };
@@ -217,19 +252,19 @@ export default function Home() {
                 className="example-prompt"
                 onClick={() => setMedicineName("ibuprofen")}
               >
-                What is ibuprofen used for?
+                ibuprofen
               </button>
               <button
                 className="example-prompt"
                 onClick={() => setMedicineName("aspirin")}
               >
-                Tell me about aspirin
+                aspirin
               </button>
               <button
                 className="example-prompt"
                 onClick={() => setMedicineName("paracetamol")}
               >
-                Paracetamol side effects
+                Paracetamol
               </button>
             </div>
           </div>
@@ -267,14 +302,25 @@ export default function Home() {
                           </div>
                         )}
                         {message.summary && (
-                          <div className="summary-grid">
-                            {RESULT_SECTIONS.map((section) => (
-                              <div className="summary-section" key={section.key}>
-                                <h3>{section.label}</h3>
-                                <p>{message.summary![section.key]}</p>
-                              </div>
-                            ))}
-                          </div>
+                          message.mode === "consultation" ? (
+                            <div className="consultation-chat" role="region" aria-label="Consultation guidance">
+                              {CONSULTATION_CHAT_SECTIONS.map((section) => (
+                                <div className="consultation-block" key={section.key}>
+                                  <h3>{section.label}</h3>
+                                  <p>{message.summary![section.key]}</p>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="summary-grid">
+                              {GUIDANCE_RESULT_SECTIONS.map((section) => (
+                                <div className="summary-section" key={section.key}>
+                                  <h3>{section.label}</h3>
+                                  <p>{message.summary![section.key]}</p>
+                                </div>
+                              ))}
+                            </div>
+                          )
                         )}
                       </>
                     )}
@@ -308,13 +354,31 @@ export default function Home() {
       <footer className="input-container">
         <div className="input-wrapper">
           <form onSubmit={handleSubmit} className="input-form">
+            <div className="input-label-row" aria-label="Input categories">
+              <button
+                type="button"
+                className={`input-label-pill ${inputMode === "guidance" ? "active" : ""}`}
+                onClick={() => setInputMode("guidance")}
+                aria-pressed={inputMode === "guidance"}
+              >
+                Guidance
+              </button>
+              <button
+                type="button"
+                className={`input-label-pill ${inputMode === "consultation" ? "active" : ""}`}
+                onClick={() => setInputMode("consultation")}
+                aria-pressed={inputMode === "consultation"}
+              >
+                Consultation
+              </button>
+            </div>
             <div className="input-box">
               <input
                 ref={inputRef}
                 type="text"
                 value={medicineName}
                 onChange={(e) => setMedicineName(e.target.value)}
-                placeholder="Ask about a medicine..."
+                placeholder={inputPlaceholder}
                 autoComplete="off"
                 disabled={loading}
               />
@@ -332,11 +396,11 @@ export default function Home() {
               </button>
             </div>
           </form>
-          {messages.length === 0 && (
+          
             <p className="input-disclaimer">
-              AI-powered medicine information from FDA data. Always consult a healthcare professional.
+              AI-powered medicine information from FDA data. Always consult a healthcare professional before consuming any medication.
             </p>
-          )}
+      
         </div>
       </footer>
     </div>
